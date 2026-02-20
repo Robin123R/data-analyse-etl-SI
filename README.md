@@ -14,6 +14,7 @@ data-analyse-etl-SI/
 │   ├── PLAN.md                ← Architecture, choix techniques, schéma OBT
 │   └── BUSINESS_RULES.md      ← Règles de validation et de transformation
 └── etl/
+    ├── fetch_holidays.py      ← Téléchargement des jours fériés (nager.at)
     ├── quality_check.py       ← Job 1 — détection des anomalies
     ├── curated.py             ← Job 2 — nettoyage et production du fichier final
     └── diagnostic.py          ← Outil de diagnostic (écarts de lignes, etc.)
@@ -44,7 +45,40 @@ data_raw/
 
 ---
 
-## 2. Job 1 — Quality Check
+## 2. Télécharger les données externes
+
+Récupère les jours fériés US depuis l'API [nager.at](https://date.nager.at) et les
+sauvegarde dans `data_raw/`.
+
+```bash
+# Années par défaut : 2022 et 2023
+python etl/fetch_holidays.py
+
+# Années personnalisées
+python etl/fetch_holidays.py --years 2022 2023 2024
+
+# Autre pays (code ISO 3166-1 alpha-2)
+python etl/fetch_holidays.py --country FR --years 2022 2023
+```
+
+**Output :** `data_raw/us_public_holidays_2022.json`, `data_raw/us_public_holidays_2023.json`
+
+Structure d'un enregistrement :
+```json
+{
+  "date": "2022-07-04",
+  "name": "Independence Day",
+  "global": true,
+  "counties": null,
+  "types": ["Public"]
+}
+```
+
+> `global: true` = fête nationale / `global: false` + `counties` = fête d'état(s) spécifique(s)
+
+---
+
+## 3. Job 1 — Quality Check
 
 Analyse les données brutes et produit un rapport des anomalies.
 
@@ -68,7 +102,7 @@ Chaque ligne du rapport correspond à une anomalie :
 
 ---
 
-## 3. Job 2 — Curated
+## 4. Job 2 — Curated
 
 Nettoie les données, applique les transformations et produit le fichier final (One Big Table).
 
@@ -114,7 +148,7 @@ mongoimport --db <base> --collection orders \
 
 ---
 
-## 4. Diagnostic (optionnel)
+## 5. Diagnostic (optionnel)
 
 En cas d'écart de lignes entre le fichier produit et la base de données cible :
 

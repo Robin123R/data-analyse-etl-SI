@@ -8,10 +8,12 @@ Transformations appliquées :
   - OrderID vide       → inférence par lignes adjacentes (si next - prev == 2), sinon null
   - OrderID valide     → préfixe O → 0  (ex. O0000001 → 00000001)
   - SupplierID         → préfixe lettre → 0  (ex. S002 → 0002) — moodle_01 + moodle_03
-  - OrderDate vide     → null
+  - OrderDate vide     → utilise PaymentDate si disponible, sinon null
+  - PaymentDate vide   → utilise OrderDate si disponible, sinon null
+  - OrderDate > PaymentDate → échange des deux valeurs
   - ClientName vide    → null
   - ProductName vide   → null
-  - OrderDate > PaymentDate → ignoré, ligne conservée telle quelle
+  - Tous les champs null restants dans l'OBT → "unknown"
   - moodle_02 dédoublonné sur ClientName + ProductName avant jointure
   - Adresse décomposée en 4 champs plats : ClientStreet, ClientCity, ClientState, ClientZip
 
@@ -88,6 +90,42 @@ def null_if_blank(series: pd.Series) -> pd.Series:
     blank = series.isna() | series.fillna("").str.strip().eq("")
     return series.where(~blank, other=None)
 
+
+def fix_dates(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Applique les règles de cohérence sur OrderDate et PaymentDate, dans cet ordre :
+      1. OrderDate vide  → prend la valeur de PaymentDate (si disponible)
+      2. PaymentDate vide → prend la valeur de OrderDate  (après étape 1)
+      3. OrderDate > PaymentDate → échange des deux valeurs
+
+    Si les deux dates sont vides, elles restent null après les étapes 1 et 2.
+    La comparaison de l'étape 3 est lexicographique sur les chaînes ISO
+    (YYYY-MM-DD HH:MM:SS), ce qui est équivalent à une comparaison chronologique.
+    """
+    df = df.copy()
+
+    od_empty  = df["OrderDate"].isna()
+    pmt_empty = df["PaymentDate"].isna()
+
+    # 1. OrderDate vide → PaymentDate
+    df.loc[od_empty, "OrderDate"] = df.loc[od_empty, "PaymentDate"]
+
+    # 2. PaymentDate vide → OrderDate (utilise la OrderDate déjà complétée à l'étape 1)
+    df.loc[pmt_empty, "PaymentDate"] = df.loc[pmt_empty, "OrderDate"]
+
+    # 3. Swap si OrderDate > PaymentDate
+    both_present = df["OrderDate"].notna() & df["PaymentDate"].notna()
+    swap = both_present & (df["OrderDate"] > df["PaymentDate"])
+    tmp = df.loc[swap, "OrderDate"].copy()
+    df.loc[swap, "OrderDate"]    = df.loc[swap, "PaymentDate"]
+    df.loc[swap, "PaymentDate"]  = tmp
+
+    print(f"    OrderDate vide → PaymentDate        : {int(od_empty.sum()):,}")
+    print(f"    PaymentDate vide → OrderDate        : {int(pmt_empty.sum()):,}")
+    print(f"    Échange OD ↔ PD (OD > PD)           : {int(swap.sum()):,}")
+
+    return df
+
 # ─── moodle_01 — Orders ───────────────────────────────────────────────────────
 
 def infer_order_ids(df: pd.DataFrame) -> pd.DataFrame:
@@ -158,6 +196,10 @@ def load_orders(filepaths: list) -> pd.DataFrame:
         # 4. Champs vides → null
         for col in ("OrderDate", "ClientName", "ProductName"):
             df[col] = null_if_blank(df[col])
+
+        # 5. Cohérence OrderDate / PaymentDate
+        print("    [Cohérence dates]")
+        df = fix_dates(df)
 
         frames.append(df)
 
@@ -296,11 +338,14 @@ def build_obt(
             "Vérifier que moodle_02 est bien dédoublonné sur ClientName+ProductName."
         )
 
-    # Rapport sur la couverture des jointures
+    # Rapport sur la couverture des jointures (avant remplacement des null)
     null_supplier = df["SupplierName"].isna().sum()
     null_address  = df["ClientStreet"].isna().sum()
     print(f"  Lignes sans SupplierName (SupplierID absent de moodle_03) : {null_supplier:,}")
     print(f"  Lignes sans adresse (ClientName+ProductName absent de moodle_02) : {null_address:,}")
+
+    # Remplacement global : tous les null restants → "unknown"
+    df = df.fillna("unknown")
 
     return df[OBT_COLUMNS]
 

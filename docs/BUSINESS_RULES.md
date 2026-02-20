@@ -32,8 +32,8 @@
 ### Règles additionnelles
 
 - `OrderID` doit être **unique** dans le dataset
-- `OrderDate` doit être **antérieure ou égale** à `PaymentDate`
 - Une ligne est invalide si **un seul champ** ne respecte pas son format
+- `OrderDate` > `PaymentDate` : signalé dans le quality report, corrigé par échange au niveau curated
 
 ---
 
@@ -120,21 +120,21 @@ Résultat de la jointure des trois datasets.
 **Nombre de lignes : exactement 1 000 000** — identique à moodle_01 (la fact table est la base,
 les dimensions enrichissent chaque ligne sans en créer ni en supprimer).
 
-| Champ | Source | Type | Peut être null ? |
+| Champ | Source | Type | Valeur si données manquantes |
 |---|---|---|---|
-| `OrderID` | moodle_01 | string | Oui (vide non inférable) |
-| `OrderDate` | moodle_01 | datetime | Oui (vide → null) |
-| `SupplierID` | moodle_01 | string | Non |
-| `SupplierName` | moodle_03 | string | Oui (SupplierID absent de moodle_03) |
-| `OrderAmount` | moodle_01 | float | Non |
-| `PaymentDate` | moodle_01 | datetime | Non |
-| `CustomerSatisfaction` | moodle_01 | int | Non |
-| `ClientName` | moodle_01 | string | Oui (vide → null) |
-| `ClientStreet` | moodle_02 | string | Oui (couple ClientName+ProductName absent de moodle_02) |
-| `ClientCity` | moodle_02 | string | Oui (couple ClientName+ProductName absent de moodle_02) |
-| `ClientState` | moodle_02 | string | Oui (couple ClientName+ProductName absent de moodle_02) |
-| `ClientZip` | moodle_02 | string | Oui (couple ClientName+ProductName absent de moodle_02) |
-| `ProductName` | moodle_01 | string | Oui (vide → null) |
+| `OrderID` | moodle_01 | string | `"unknown"` (vide non inférable) |
+| `OrderDate` | moodle_01 | datetime string | `"unknown"` (les deux dates vides) |
+| `SupplierID` | moodle_01 | string | Non applicable |
+| `SupplierName` | moodle_03 | string | `"unknown"` (SupplierID absent de moodle_03) |
+| `OrderAmount` | moodle_01 | float string | Non applicable |
+| `PaymentDate` | moodle_01 | datetime string | `"unknown"` (les deux dates vides) |
+| `CustomerSatisfaction` | moodle_01 | int string | Non applicable |
+| `ClientName` | moodle_01 | string | `"unknown"` (vide dans la source) |
+| `ClientStreet` | moodle_02 | string | `"unknown"` (couple absent de moodle_02) |
+| `ClientCity` | moodle_02 | string | `"unknown"` (couple absent de moodle_02) |
+| `ClientState` | moodle_02 | string | `"unknown"` (couple absent de moodle_02) |
+| `ClientZip` | moodle_02 | string | `"unknown"` (couple absent de moodle_02) |
+| `ProductName` | moodle_01 | string | `"unknown"` (vide dans la source) |
 
 ---
 
@@ -162,9 +162,9 @@ elles reçoivent explicitement `null` plutôt que d'être rejetées.
 
 | Champ | Condition | Traitement curated |
 |---|---|---|
-| `ProductName` | Valeur vide ou null | Remplacer par `null` |
-| `ClientName` | Valeur vide ou null | Remplacer par `null` |
-| `OrderDate` | Valeur vide ou null | Remplacer par `null` |
+| `ProductName` | Valeur vide ou null | `null` (puis `"unknown"` si toujours null en fin de pipeline) |
+| `ClientName` | Valeur vide ou null | `null` (puis `"unknown"` si toujours null en fin de pipeline) |
+| `OrderDate` | Valeur vide ou null | `null` (puis règles de cohérence dates ci-dessous) |
 
 ### Inférence de l'OrderID manquant ou corrompu (moodle_01)
 
@@ -192,13 +192,34 @@ car une valeur corrompue ne peut pas être utilisée telle quelle :
 | `O0209975` | `O07606X7` | `O0209980` | non inférable (écart ≠ 2) → `null` |
 | _(vide)_ | _(vide)_ | `O0209977` | non inférable (pas de précédent) → `null` |
 
----
+### Gestion de la cohérence OrderDate / PaymentDate (moodle_01)
 
-## Anomalies ignorées (décision métier)
+Ces règles s'appliquent **après** la nullification des champs vides, dans cet ordre :
 
-| Anomalie | Raison | Action |
+| Ordre | Condition | Transformation |
 |---|---|---|
-| `OrderDate` postérieure à `PaymentDate` | Non actionnable — impossible de savoir laquelle des deux dates est correcte | Ignoré dans le quality check et dans le curated. La ligne est conservée telle quelle. |
+| 1 | `OrderDate` vide / null | Remplacer par la valeur de `PaymentDate` (si disponible) |
+| 2 | `PaymentDate` vide / null | Remplacer par la valeur de `OrderDate` (après l'étape 1) |
+| 3 | `OrderDate` > `PaymentDate` | Échanger les deux valeurs |
+
+> Si les deux dates sont vides, elles restent `null` après les étapes 1 et 2,
+> puis reçoivent `"unknown"` via la règle globale de remplacement null.
+>
+> La comparaison de l'étape 3 est lexicographique sur les chaînes ISO
+> (`YYYY-MM-DD HH:MM:SS`), ce qui est équivalent à une comparaison chronologique.
+
+### Remplacement global null → "unknown"
+
+**Après toutes les transformations et jointures**, tout champ encore null dans l'OBT
+reçoit la valeur `"unknown"`. Aucun champ null n'est présent dans le fichier final.
+
+| Champs concernés | Cause possible |
+|---|---|
+| `OrderID` | OrderID non inférable |
+| `OrderDate`, `PaymentDate` | Les deux dates étaient vides dans la source |
+| `SupplierName` | SupplierID absent de moodle_03 |
+| `ClientName`, `ProductName` | Valeur vide dans moodle_01 |
+| `ClientStreet`, `ClientCity`, `ClientState`, `ClientZip` | Couple ClientName+ProductName absent de moodle_02 |
 
 ---
 
