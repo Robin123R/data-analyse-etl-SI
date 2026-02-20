@@ -1,0 +1,329 @@
+"""
+curated.py — Job 2 : transformation et jointure OBT (curated level)
+
+Ce job lit les fichiers raw, applique toutes les business rules de nettoyage
+et produit un fichier curated (One Big Table) prêt pour l'export MongoDB.
+
+Transformations appliquées :
+  - OrderID vide       → inférence par lignes adjacentes (si next - prev == 2), sinon null
+  - OrderID valide     → préfixe O → 0  (ex. O0000001 → 00000001)
+  - SupplierID         → préfixe lettre → 0  (ex. S002 → 0002) — moodle_01 + moodle_03
+  - OrderDate vide     → null
+  - ClientName vide    → null
+  - ProductName vide   → null
+  - OrderDate > PaymentDate → ignoré, ligne conservée telle quelle
+  - moodle_02 dédoublonné sur ClientName + ProductName avant jointure
+  - Adresse décomposée en 4 champs plats : ClientStreet, ClientCity, ClientState, ClientZip
+
+Jointures (LEFT JOIN depuis moodle_01) :
+  - moodle_01 ← moodle_03 sur SupplierID
+  - moodle_01 ← moodle_02 sur ClientName + ProductName
+
+Garantie : 1 000 000 lignes en sortie (cardinalité moodle_01 préservée).
+"""
+
+import pandas as pd
+from pathlib import Path
+
+# ─── Chemins ──────────────────────────────────────────────────────────────────
+
+PROJECT_ROOT   = Path(__file__).parent.parent
+DATA_RAW_DIR   = PROJECT_ROOT / "data_raw"
+DATA_CLEAN_DIR = PROJECT_ROOT / "data_clean"
+OUTPUT_FILE    = DATA_CLEAN_DIR / "curated_orders.csv"
+
+# ─── Constantes ───────────────────────────────────────────────────────────────
+
+ORDERS_COLUMNS    = {"OrderID", "OrderDate", "SupplierID", "OrderAmount",
+                     "PaymentDate", "CustomerSatisfaction", "ClientName", "ProductName"}
+SUPPLIERS_COLUMNS = {"SupplierID", "SupplierName"}
+CLIENTS_COLUMNS   = ["ClientName", "ClientAddress", "ProductName"]
+
+OBT_COLUMNS = [
+    "OrderID", "OrderDate", "SupplierID", "SupplierName",
+    "OrderAmount", "PaymentDate", "CustomerSatisfaction",
+    "ClientName", "ClientStreet", "ClientCity", "ClientState", "ClientZip",
+    "ProductName",
+]
+
+# ─── Détection des fichiers ────────────────────────────────────────────────────
+
+def detect_file_type(filepath: Path) -> str:
+    try:
+        cols = set(pd.read_csv(filepath, nrows=0).columns)
+        if cols == ORDERS_COLUMNS:
+            return "orders"
+        if cols == SUPPLIERS_COLUMNS:
+            return "suppliers"
+    except Exception:
+        pass
+    return "clients"
+
+
+def find_files() -> dict:
+    """Classe tous les CSV de data_raw/ par type."""
+    result = {"orders": [], "clients": [], "suppliers": []}
+    for f in sorted(DATA_RAW_DIR.glob("*.csv")):
+        result[detect_file_type(f)].append(f)
+    return result
+
+# ─── Transformations communes ─────────────────────────────────────────────────
+
+def normalize_id_prefix(series: pd.Series, pattern: str) -> pd.Series:
+    """
+    Remplace le premier caractère (lettre préfixe) par '0' pour les valeurs
+    correspondant au pattern regex.
+      ex. O0000001 → 00000001   (pattern: ^O\\d{7}$)
+      ex. S002     → 0002       (pattern: ^[A-Z]\\d{3}$)
+    Les valeurs ne correspondant pas au pattern (y compris null) sont inchangées.
+    """
+    result = series.copy()
+    valid  = series.str.match(pattern, na=False)
+    result[valid] = "0" + series[valid].str[1:]
+    return result
+
+
+def null_if_blank(series: pd.Series) -> pd.Series:
+    """Remplace les valeurs vides ou whitespace-only par None (null)."""
+    blank = series.isna() | series.fillna("").str.strip().eq("")
+    return series.where(~blank, other=None)
+
+# ─── moodle_01 — Orders ───────────────────────────────────────────────────────
+
+def infer_order_ids(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pour les OrderID vides/null :
+      - Si le dernier ID valide précédent et le premier ID valide suivant
+        diffèrent de 2, l'ID manquant est reconstruit (format O + 7 chiffres).
+      - Sinon → null.
+    Les ID au format invalide non vides sont laissés tels quels.
+    """
+    ids      = df["OrderID"].fillna("")
+    is_empty = df["OrderID"].isna() | ids.str.strip().eq("")
+    is_valid = ids.str.match(r"^O\d{7}$")
+
+    # Numéros extraits des ID valides (NaN pour tout le reste)
+    valid_nums = pd.to_numeric(ids.where(is_valid).str[1:], errors="coerce")
+    prev_nums  = valid_nums.ffill()   # dernier ID valide précédent
+    next_nums  = valid_nums.bfill()   # premier ID valide suivant
+
+    inferable = (
+        is_empty
+        & prev_nums.notna()
+        & next_nums.notna()
+        & ((next_nums - prev_nums) == 2)
+    )
+    inferred_vals = "O" + (prev_nums.fillna(0) + 1).astype(int).astype(str).str.zfill(7)
+
+    df = df.copy()
+    df.loc[inferable,           "OrderID"] = inferred_vals[inferable]
+    df.loc[is_empty & ~inferable, "OrderID"] = None
+    return df
+
+
+def load_orders(filepaths: list) -> pd.DataFrame:
+    frames = []
+
+    for fp in filepaths:
+        print(f"  Lecture : {fp.name}")
+        df = pd.read_csv(fp, dtype=str)
+
+        # 1. Inférence des OrderID vides
+        before_infer = df["OrderID"].isna().sum()
+        df = infer_order_ids(df)
+        inferred_count = before_infer - df["OrderID"].isna().sum()
+        print(f"    OrderID inférés   : {int(inferred_count):,}")
+        print(f"    OrderID null restants : {int(df['OrderID'].isna().sum()):,}")
+
+        # 2. Normalisation OrderID : O → 0
+        df["OrderID"] = normalize_id_prefix(null_if_blank(df["OrderID"]), r"^O\d{7}$")
+
+        # 3. Normalisation SupplierID : lettre → 0
+        df["SupplierID"] = normalize_id_prefix(df["SupplierID"].fillna(""), r"^[A-Z]\d{3}$")
+        df["SupplierID"] = null_if_blank(df["SupplierID"])
+
+        # 4. Champs vides → null
+        for col in ("OrderDate", "ClientName", "ProductName"):
+            df[col] = null_if_blank(df[col])
+
+        frames.append(df)
+
+    if not frames:
+        return pd.DataFrame(columns=list(ORDERS_COLUMNS))
+
+    return pd.concat(frames, ignore_index=True)
+
+# ─── moodle_02 — Clients ──────────────────────────────────────────────────────
+
+def decompose_address(addr: pd.Series) -> pd.DataFrame:
+    """
+    Décompose une adresse au format 'Street, City, State ZIP' en 4 colonnes.
+    Les adresses non décomposables produisent des null pour les 4 champs.
+
+    Algorithme :
+      - Séparer Street+City de State+ZIP sur la dernière virgule
+      - Séparer Street de City sur la première virgule du côté gauche
+      - Séparer State de ZIP sur le premier espace du côté droit
+    """
+    result = pd.DataFrame(
+        {"ClientStreet": None, "ClientCity": None, "ClientState": None, "ClientZip": None},
+        index=addr.index,
+        dtype=object,
+    )
+
+    valid = addr.notna() & (addr.str.count(",") >= 2)
+    if not valid.any():
+        return result
+
+    a = addr[valid]
+
+    # "Street, City, State ZIP" → left="Street, City", right="State ZIP"
+    split_last  = a.str.rsplit(",", n=1)
+    left        = split_last.str[0]
+    right       = split_last.str[1].str.strip()
+
+    # left → street, city
+    split_first = left.str.split(",", n=1)
+    street      = split_first.str[0].str.strip()
+    city        = split_first.str[1].str.strip()
+
+    # right → state, zip
+    split_sz    = right.str.split(" ", n=1)
+    state       = split_sz.str[0].str.strip()
+    zip_code    = split_sz.str[1].str.strip()
+
+    result.loc[valid, "ClientStreet"] = street.values
+    result.loc[valid, "ClientCity"]   = city.values
+    result.loc[valid, "ClientState"]  = state.values
+    result.loc[valid, "ClientZip"]    = zip_code.values
+
+    return result
+
+
+def load_clients(filepaths: list) -> pd.DataFrame:
+    frames = []
+
+    for fp in filepaths:
+        print(f"  Lecture : {fp.name}")
+        df = pd.read_csv(fp, header=None, names=CLIENTS_COLUMNS, dtype=str)
+        frames.append(df)
+
+    if not frames:
+        return pd.DataFrame(
+            columns=["ClientName", "ProductName",
+                     "ClientStreet", "ClientCity", "ClientState", "ClientZip"]
+        )
+
+    df = pd.concat(frames, ignore_index=True)
+    before = len(df)
+
+    # Dédoublonnage sur la clé de jointure (première occurrence conservée)
+    df = df.drop_duplicates(subset=["ClientName", "ProductName"], keep="first")
+    print(f"  Dédoublonnage sur ClientName+ProductName : "
+          f"{before - len(df):,} lignes supprimées, {len(df):,} conservées")
+
+    # Décomposition de l'adresse en 4 champs plats
+    addr_cols = decompose_address(df["ClientAddress"])
+    df = pd.concat([df.drop(columns=["ClientAddress"]), addr_cols], axis=1)
+
+    return df
+
+# ─── moodle_03 — Suppliers ────────────────────────────────────────────────────
+
+def load_suppliers(filepaths: list) -> pd.DataFrame:
+    frames = []
+
+    for fp in filepaths:
+        print(f"  Lecture : {fp.name}")
+        df = pd.read_csv(fp, dtype=str)
+
+        # Normalisation SupplierID : lettre → 0
+        df["SupplierID"] = normalize_id_prefix(df["SupplierID"].fillna(""), r"^[A-Z]\d{3}$")
+        df["SupplierID"] = null_if_blank(df["SupplierID"])
+
+        frames.append(df)
+
+    if not frames:
+        return pd.DataFrame(columns=["SupplierID", "SupplierName"])
+
+    return pd.concat(frames, ignore_index=True)
+
+# ─── Jointures OBT ────────────────────────────────────────────────────────────
+
+def build_obt(
+    df_orders: pd.DataFrame,
+    df_clients: pd.DataFrame,
+    df_suppliers: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Construit l'OBT par deux LEFT JOINs depuis moodle_01.
+    Lève une erreur si le nombre de lignes change (jointure non 1-to-1).
+    """
+    n_in = len(df_orders)
+
+    # JOIN 1 : orders ← suppliers sur SupplierID
+    df = df_orders.merge(
+        df_suppliers[["SupplierID", "SupplierName"]],
+        on="SupplierID",
+        how="left",
+    )
+
+    # JOIN 2 : orders ← clients sur ClientName + ProductName
+    df = df.merge(
+        df_clients[["ClientName", "ProductName",
+                    "ClientStreet", "ClientCity", "ClientState", "ClientZip"]],
+        on=["ClientName", "ProductName"],
+        how="left",
+    )
+
+    n_out = len(df)
+    if n_out != n_in:
+        raise RuntimeError(
+            f"La jointure a modifié le nombre de lignes : {n_in:,} → {n_out:,}.\n"
+            "Vérifier que moodle_02 est bien dédoublonné sur ClientName+ProductName."
+        )
+
+    # Rapport sur la couverture des jointures
+    null_supplier = df["SupplierName"].isna().sum()
+    null_address  = df["ClientStreet"].isna().sum()
+    print(f"  Lignes sans SupplierName (SupplierID absent de moodle_03) : {null_supplier:,}")
+    print(f"  Lignes sans adresse (ClientName+ProductName absent de moodle_02) : {null_address:,}")
+
+    return df[OBT_COLUMNS]
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+def main():
+    DATA_CLEAN_DIR.mkdir(exist_ok=True)
+
+    files = find_files()
+
+    if not files["orders"]:
+        print("Aucun fichier orders trouvé dans data_raw/")
+        return
+
+    print("\n[moodle_01 — Orders]")
+    df_orders = load_orders(files["orders"])
+    print(f"  Total lignes : {len(df_orders):,}")
+
+    print("\n[moodle_02 — Clients]")
+    df_clients = load_clients(files["clients"])
+    print(f"  Total lignes après dédup : {len(df_clients):,}")
+
+    print("\n[moodle_03 — Suppliers]")
+    df_suppliers = load_suppliers(files["suppliers"])
+    print(f"  Total lignes : {len(df_suppliers):,}")
+
+    print("\n[Jointures OBT]")
+    df_obt = build_obt(df_orders, df_clients, df_suppliers)
+
+    df_obt.to_csv(OUTPUT_FILE, index=False, encoding="utf-8")
+
+    print(f"\n{'─' * 55}")
+    print(f"Curated   : {OUTPUT_FILE}")
+    print(f"Lignes    : {len(df_obt):,}")
+    print(f"Colonnes  : {', '.join(OBT_COLUMNS)}")
+
+
+if __name__ == "__main__":
+    main()
