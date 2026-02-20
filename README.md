@@ -47,23 +47,29 @@ data_raw/
 
 ## 2. Télécharger les données externes
 
-Récupère les jours fériés US depuis l'API [nager.at](https://date.nager.at) et les
-sauvegarde dans `data_raw/`.
+Deux sources sont disponibles, téléchargeables ensemble ou séparément.
 
 ```bash
-# Années par défaut : 2022 et 2023
+# Les deux sources, années par défaut 2022 2023 (défaut)
 python etl/fetch_holidays.py
 
 # Années personnalisées
 python etl/fetch_holidays.py --years 2022 2023 2024
 
-# Autre pays (code ISO 3166-1 alpha-2)
-python etl/fetch_holidays.py --country FR --years 2022 2023
+# nager.at uniquement (jours fériés US)
+python etl/fetch_holidays.py --source nager
+
+# Autre pays pour nager.at
+python etl/fetch_holidays.py --source nager --country FR --years 2022 2023
+
+# jiejiariapi.com uniquement (week-ends CN)
+python etl/fetch_holidays.py --source jiejiariapi
 ```
 
-**Output :** `data_raw/us_public_holidays_2022.json`, `data_raw/us_public_holidays_2023.json`
+### Source 1 — nager.at (jours fériés par pays)
 
-Structure d'un enregistrement :
+**Output :** `data_raw/{country}_public_holidays_{year}.json`
+
 ```json
 {
   "date": "2022-07-04",
@@ -75,6 +81,20 @@ Structure d'un enregistrement :
 ```
 
 > `global: true` = fête nationale / `global: false` + `counties` = fête d'état(s) spécifique(s)
+
+### Source 2 — jiejiariapi.com (week-ends et jours ajustés CN)
+
+**Output :** `data_raw/cn_weekends_{year}.json`
+
+```json
+{
+  "date": "2022-01-01",
+  "name": "周六",
+  "isOffDay": false
+}
+```
+
+> `isOffDay: false` = jour travaillé malgré le week-end (ajustement de calendrier CN)
 
 ---
 
