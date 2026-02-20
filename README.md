@@ -1,0 +1,135 @@
+# data-analyse-etl-SI
+
+Pipeline ETL de nettoyage et transformation de données vers MongoDB.
+
+---
+
+## Structure du projet
+
+```
+data-analyse-etl-SI/
+├── data_raw/                  ← Déposer les fichiers CSV ici (lecture seule)
+├── data_clean/                ← Fichiers générés par les jobs (créé automatiquement)
+├── docs/
+│   ├── PLAN.md                ← Architecture, choix techniques, schéma OBT
+│   └── BUSINESS_RULES.md      ← Règles de validation et de transformation
+└── etl/
+    ├── quality_check.py       ← Job 1 — détection des anomalies
+    ├── curated.py             ← Job 2 — nettoyage et production du fichier final
+    └── diagnostic.py          ← Outil de diagnostic (écarts de lignes, etc.)
+```
+
+---
+
+## Prérequis
+
+```bash
+pip install pandas
+```
+
+---
+
+## 1. Déposer les fichiers sources
+
+Copier les trois fichiers CSV dans `data_raw/` :
+
+```
+data_raw/
+├── DataSet_moodle_01.csv   ← Données de commandes (fact table, ~1 000 000 lignes)
+├── DataSet_moodle_02.csv   ← Informations clients (pas de header)
+└── DataSet_moodle_03.csv   ← Table de référence suppliers
+```
+
+> Les fichiers dans `data_raw/` ne sont **jamais modifiés**.
+
+---
+
+## 2. Job 1 — Quality Check
+
+Analyse les données brutes et produit un rapport des anomalies.
+
+```bash
+python etl/quality_check.py
+```
+
+**Output :** `data_clean/quality_report.csv`
+
+Chaque ligne du rapport correspond à une anomalie :
+
+| Colonne | Description |
+|---|---|
+| `source_file` | Fichier source concerné |
+| `line_number` | Numéro de ligne dans le fichier raw |
+| `raw_data` | Contenu brut de la ligne |
+| `field` | Champ en erreur |
+| `error` | Description de l'anomalie |
+
+> Lire `docs/BUSINESS_RULES.md` pour le détail des règles de validation appliquées.
+
+---
+
+## 3. Job 2 — Curated
+
+Nettoie les données, applique les transformations et produit le fichier final (One Big Table).
+
+**Export CSV** (pour PostgreSQL, Excel, etc.) :
+```bash
+python etl/curated.py --format csv
+```
+Output : `data_clean/curated_orders.csv`
+
+**Export JSON** (pour MongoDB via `mongoimport`) :
+```bash
+python etl/curated.py --format json
+```
+Output : `data_clean/curated_orders.json`
+
+> Sans `--format`, le CSV est produit par défaut.
+
+### Import dans MongoDB
+
+```bash
+mongoimport --db <base> --collection orders \
+            --type json \
+            --file data_clean/curated_orders.json
+```
+
+### Schéma du fichier produit
+
+| Champ | Source | Type |
+|---|---|---|
+| `OrderID` | moodle_01 | string (`00000001`) |
+| `OrderDate` | moodle_01 | datetime string |
+| `SupplierID` | moodle_01 | string (`0002`) |
+| `SupplierName` | moodle_03 | string |
+| `OrderAmount` | moodle_01 | float |
+| `PaymentDate` | moodle_01 | datetime string |
+| `CustomerSatisfaction` | moodle_01 | int |
+| `ClientName` | moodle_01 | string |
+| `ClientStreet` | moodle_02 | string |
+| `ClientCity` | moodle_02 | string |
+| `ClientState` | moodle_02 | string |
+| `ClientZip` | moodle_02 | string |
+| `ProductName` | moodle_01 | string |
+
+---
+
+## 4. Diagnostic (optionnel)
+
+En cas d'écart de lignes entre le fichier produit et la base de données cible :
+
+```bash
+python etl/diagnostic.py
+```
+
+Vérifie les lignes physiques vs logiques, les caractères problématiques et peut
+comparer les OrderIDs avec un export PostgreSQL.
+
+---
+
+## Documentation
+
+| Fichier | Contenu |
+|---|---|
+| `docs/PLAN.md` | Architecture du projet, choix OBT vs Star Schema, logique de jointure |
+| `docs/BUSINESS_RULES.md` | Règles de validation champ par champ, transformations curated, anomalies ignorées |

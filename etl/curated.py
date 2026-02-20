@@ -304,10 +304,38 @@ def build_obt(
 
     return df[OBT_COLUMNS]
 
+# ─── Export ───────────────────────────────────────────────────────────────────
+
+def export(df: pd.DataFrame, fmt: str) -> Path:
+    """
+    Exporte le DataFrame dans le format demandé.
+      csv  → data_clean/curated_orders.csv
+      json → data_clean/curated_orders.json  (NDJSON, 1 document par ligne)
+             Format natif pour mongoimport --type json
+    """
+    DATA_CLEAN_DIR.mkdir(exist_ok=True)
+
+    if fmt == "json":
+        output = DATA_CLEAN_DIR / "curated_orders.json"
+        df.to_json(output, orient="records", lines=True,
+                   force_ascii=False, default_handler=str)
+    else:
+        output = DATA_CLEAN_DIR / "curated_orders.csv"
+        df.to_csv(output, index=False, encoding="utf-8")
+
+    return output
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    DATA_CLEAN_DIR.mkdir(exist_ok=True)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Job 2 — Curated OBT")
+    parser.add_argument(
+        "--format", choices=["csv", "json"], default="csv",
+        help="Format de sortie : csv (défaut) ou json (NDJSON pour mongoimport)"
+    )
+    args = parser.parse_args()
 
     files = find_files()
 
@@ -330,10 +358,11 @@ def main():
     print("\n[Jointures OBT]")
     df_obt = build_obt(df_orders, df_clients, df_suppliers)
 
-    df_obt.to_csv(OUTPUT_FILE, index=False, encoding="utf-8")
+    output = export(df_obt, args.format)
 
     print(f"\n{'─' * 55}")
-    print(f"Curated   : {OUTPUT_FILE}")
+    print(f"Format    : {args.format.upper()}")
+    print(f"Curated   : {output}")
     print(f"Lignes    : {len(df_obt):,}")
     print(f"Colonnes  : {', '.join(OBT_COLUMNS)}")
 
