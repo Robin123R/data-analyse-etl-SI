@@ -204,7 +204,51 @@ mongoimport --db <base> --collection calendar \
 
 ---
 
-## 7. Diagnostic (optionnel)
+## 7. Docker — MongoDB + import automatique
+
+Lance MongoDB et importe les deux tables curées en une seule commande.
+
+### Prérequis
+
+Les deux fichiers JSON doivent exister avant de lancer Docker :
+
+```bash
+python etl/curated.py --format json          # → data_clean/curated_orders.json
+python etl/curated_calendar.py --format json # → data_clean/curated_calendar.json
+```
+
+### Démarrage
+
+```bash
+docker compose up
+```
+
+Le service `importer` attend que MongoDB soit prêt (healthcheck), puis importe
+les deux collections dans la base `etl_db` :
+
+| Collection | Fichier source | Lignes |
+|---|---|---|
+| `orders` | `data_clean/curated_orders.json` | ~1 000 000 |
+| `calendar` | `data_clean/curated_calendar.json` | 730 |
+
+> Chaque relance de `docker compose up` **écrase** les collections existantes (`--drop`).
+
+### Connexion
+
+```
+mongodb://localhost:27017/etl_db
+```
+
+### Arrêt
+
+```bash
+docker compose down          # arrête les conteneurs, conserve les données
+docker compose down -v       # arrête et supprime le volume (données effacées)
+```
+
+---
+
+## 9. Diagnostic (optionnel)
 
 En cas d'écart de lignes entre le fichier produit et la base de données cible :
 

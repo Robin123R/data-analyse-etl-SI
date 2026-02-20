@@ -1,0 +1,42 @@
+services:
+
+  mongo:
+    image: mongo:7
+    container_name: etl_mongo
+    command: ["mongod", "--config", "/etc/mongod.conf"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./docker/mongod.conf:/etc/mongod.conf:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')", "--quiet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  importer:
+    image: mongo:7
+    container_name: etl_importer
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ./data_clean:/data_clean:ro
+    command:
+      - bash
+      - -c
+      - |
+        echo "→ Import orders..."
+        mongoimport --host mongo --db etl_db --collection orders \
+                    --type json --drop \
+                    --file /data_clean/curated_orders.json
+        echo "→ Import calendar..."
+        mongoimport --host mongo --db etl_db --collection calendar \
+                    --type json --drop \
+                    --file /data_clean/curated_calendar.json
+        echo "✓ Import terminé."
+
+volumes:
+  mongo_data:
