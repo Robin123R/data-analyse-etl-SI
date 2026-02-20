@@ -92,23 +92,29 @@ def null_if_blank(series: pd.Series) -> pd.Series:
 
 def infer_order_ids(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Pour les OrderID vides/null :
+    Pour les OrderID vides/null ET les OrderID au format invalide (ex. O07606X7) :
       - Si le dernier ID valide précédent et le premier ID valide suivant
         diffèrent de 2, l'ID manquant est reconstruit (format O + 7 chiffres).
       - Sinon → null.
-    Les ID au format invalide non vides sont laissés tels quels.
-    """
-    ids      = df["OrderID"].fillna("")
-    is_empty = df["OrderID"].isna() | ids.str.strip().eq("")
-    is_valid = ids.str.match(r"^O\d{7}$")
 
-    # Numéros extraits des ID valides (NaN pour tout le reste)
+    Les deux cas (vide et format invalide) reçoivent le même traitement :
+    on ne peut pas faire confiance à une valeur corrompue, donc on l'écrase.
+    """
+    ids        = df["OrderID"].fillna("")
+    is_empty   = df["OrderID"].isna() | ids.str.strip().eq("")
+    is_valid   = ids.str.match(r"^O\d{7}$")
+    is_invalid = ~is_empty & ~is_valid   # non vide mais format incorrect
+
+    # Les deux cas déclenchent l'inférence
+    needs_inference = is_empty | is_invalid
+
+    # Numéros extraits des ID valides uniquement (NaN pour tout le reste)
     valid_nums = pd.to_numeric(ids.where(is_valid).str[1:], errors="coerce")
     prev_nums  = valid_nums.ffill()   # dernier ID valide précédent
     next_nums  = valid_nums.bfill()   # premier ID valide suivant
 
     inferable = (
-        is_empty
+        needs_inference
         & prev_nums.notna()
         & next_nums.notna()
         & ((next_nums - prev_nums) == 2)
@@ -116,8 +122,8 @@ def infer_order_ids(df: pd.DataFrame) -> pd.DataFrame:
     inferred_vals = "O" + (prev_nums.fillna(0) + 1).astype(int).astype(str).str.zfill(7)
 
     df = df.copy()
-    df.loc[inferable,           "OrderID"] = inferred_vals[inferable]
-    df.loc[is_empty & ~inferable, "OrderID"] = None
+    df.loc[inferable,                    "OrderID"] = inferred_vals[inferable]
+    df.loc[needs_inference & ~inferable, "OrderID"] = None
     return df
 
 
@@ -128,12 +134,19 @@ def load_orders(filepaths: list) -> pd.DataFrame:
         print(f"  Lecture : {fp.name}")
         df = pd.read_csv(fp, dtype=str)
 
-        # 1. Inférence des OrderID vides
-        before_infer = df["OrderID"].isna().sum()
+        # 1. Inférence des OrderID vides OU format invalide
+        ids_raw    = df["OrderID"].fillna("")
+        n_empty    = (df["OrderID"].isna() | ids_raw.str.strip().eq("")).sum()
+        n_invalid  = (~(df["OrderID"].isna() | ids_raw.str.strip().eq(""))
+                      & ~ids_raw.str.match(r"^O\d{7}$")).sum()
+        print(f"    OrderID vides          : {int(n_empty):,}")
+        print(f"    OrderID format invalide: {int(n_invalid):,}")
+
         df = infer_order_ids(df)
-        inferred_count = before_infer - df["OrderID"].isna().sum()
-        print(f"    OrderID inférés   : {int(inferred_count):,}")
-        print(f"    OrderID null restants : {int(df['OrderID'].isna().sum()):,}")
+
+        n_inferred = int(n_empty + n_invalid) - int(df["OrderID"].isna().sum())
+        print(f"    OrderID inférés        : {n_inferred:,}")
+        print(f"    OrderID null restants  : {int(df['OrderID'].isna().sum()):,}")
 
         # 2. Normalisation OrderID : O → 0
         df["OrderID"] = normalize_id_prefix(null_if_blank(df["OrderID"]), r"^O\d{7}$")

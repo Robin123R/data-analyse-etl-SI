@@ -166,27 +166,30 @@ elles reçoivent explicitement `null` plutôt que d'être rejetées.
 | `ClientName` | Valeur vide ou null | Remplacer par `null` |
 | `OrderDate` | Valeur vide ou null | Remplacer par `null` |
 
-### Inférence de l'OrderID manquant (moodle_01)
+### Inférence de l'OrderID manquant ou corrompu (moodle_01)
 
-Certaines lignes ont un `OrderID` vide. Si les lignes adjacentes permettent de
-déterminer la valeur manquante, elle est reconstruite.
+Deux cas déclenchent l'inférence — les deux reçoivent exactement le même traitement,
+car une valeur corrompue ne peut pas être utilisée telle quelle :
+
+| Cas | Exemple | Traitement |
+|---|---|---|
+| `OrderID` vide / null | _(vide)_ | Inférence par lignes adjacentes |
+| `OrderID` format invalide | `O07606X7` | Inférence par lignes adjacentes |
 
 **Algorithme :**
-1. Repérer les lignes avec `OrderID` vide
-2. Pour chaque ligne vide, lire le dernier `OrderID` valide précédent (`prev`) et le
-   premier `OrderID` valide suivant (`next`)
-3. Extraire les numéros : `prev_num = int(prev[1:])`, `next_num = int(next[1:])`
-4. Si `next_num - prev_num == 2` → l'OrderID manquant est `O` + `str(prev_num + 1).zfill(7)`
-5. Appliquer ensuite la normalisation `O` → `0`
-6. Si la condition n'est pas satisfaite (écart ≠ 2, ou pas de voisin valide,
-   ou plusieurs lignes vides consécutives sans voisins encadrants) → laisser `null`
+1. Repérer les lignes avec `OrderID` vide OU format invalide (`needs_inference`)
+2. Extraire les numéros des lignes voisines **valides** (`prev`, `next`)
+3. Si `next_num - prev_num == 2` → l'OrderID est `O` + `str(prev_num + 1).zfill(7)`
+4. Appliquer ensuite la normalisation `O` → `0`
+5. Si la condition n'est pas satisfaite → `null`
 
 **Exemples :**
 
-| Ligne précédente | Ligne vide | Ligne suivante | Résultat |
+| Ligne précédente | Ligne problématique | Ligne suivante | Résultat |
 |---|---|---|---|
 | `O0209975` | _(vide)_ | `O0209977` | `O0209976` → curated : `00209976` |
-| `O0209975` | _(vide)_ | `O0209980` | non inférable → `null` |
+| `O0760606` | `O07606X7` | `O0760608` | `O0760607` → curated : `00760607` |
+| `O0209975` | `O07606X7` | `O0209980` | non inférable (écart ≠ 2) → `null` |
 | _(vide)_ | _(vide)_ | `O0209977` | non inférable (pas de précédent) → `null` |
 
 ---

@@ -131,10 +131,12 @@ def _check_orderid(df: pd.DataFrame, filename: str) -> list:
                 "Vide — non inférable, sera null au niveau curated"))
 
     # ── Cas 2 : format invalide (non vide) ──
+    # Même traitement que les vides au curated : inférence par lignes adjacentes.
     invalid_fmt = ~is_empty & ~is_valid
     if invalid_fmt.any():
         errors.append(make_errors(df, invalid_fmt, filename, "OrderID",
-            "Format invalide (attendu: O + 7 chiffres), valeur: '" + ids + "'"))
+            "Format invalide (attendu: O + 7 chiffres), valeur: '" + ids + "'"
+            " — inférence par lignes adjacentes tentée au curated, sinon null"))
 
     # ── Cas 3 : duplicats ──
     dup_mask = df["OrderID"].duplicated(keep=False) & is_valid
