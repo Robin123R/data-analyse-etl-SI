@@ -34,6 +34,7 @@
 - `OrderID` doit être **unique** dans le dataset
 - Une ligne est invalide si **un seul champ** ne respecte pas son format
 - `OrderDate` > `PaymentDate` : signalé dans le quality report, corrigé par échange au niveau curated
+- `OrderDate` antérieure à 2010 : signalé dans le quality report, remplacée par `PaymentDate` au niveau curated
 
 ---
 
@@ -220,12 +221,18 @@ Ces règles s'appliquent **après** la nullification des champs vides, dans cet 
 | 1 | `OrderDate` vide / null | Remplacer par la valeur de `PaymentDate` (si disponible) |
 | 2 | `PaymentDate` vide / null | Remplacer par la valeur de `OrderDate` (après l'étape 1) |
 | 3 | `OrderDate` > `PaymentDate` | Échanger les deux valeurs |
+| 4 | `OrderDate` antérieure à 2010 | Remplacer par la valeur de `PaymentDate` |
 
 > Si les deux dates sont vides, elles restent `null` après les étapes 1 et 2,
 > puis reçoivent `"unknown"` via la règle globale de remplacement null.
 >
 > La comparaison de l'étape 3 est lexicographique sur les chaînes ISO
 > (`YYYY-MM-DD HH:MM:SS`), ce qui est équivalent à une comparaison chronologique.
+>
+> L'étape 4 s'applique **après** l'étape 3 : une `OrderDate` aberrante issue d'un
+> swap est également corrigée. Une `OrderDate` < 2010 est considérée comme une
+> erreur de saisie (ex. `1789-07-14`). Si `PaymentDate` est elle-même absente,
+> `OrderDate` reste `"unknown"` après le remplacement global.
 
 ### Remplacement global null → "unknown"
 

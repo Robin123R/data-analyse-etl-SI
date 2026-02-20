@@ -113,13 +113,16 @@ def null_if_blank(series: pd.Series) -> pd.Series:
 def fix_dates(df: pd.DataFrame) -> pd.DataFrame:
     """
     Applique les règles de cohérence sur OrderDate et PaymentDate, dans cet ordre :
-      1. OrderDate vide  → prend la valeur de PaymentDate (si disponible)
-      2. PaymentDate vide → prend la valeur de OrderDate  (après étape 1)
+      1. OrderDate vide        → prend la valeur de PaymentDate (si disponible)
+      2. PaymentDate vide      → prend la valeur de OrderDate   (après étape 1)
       3. OrderDate > PaymentDate → échange des deux valeurs
+      4. OrderDate antérieure à 2010 → remplace par PaymentDate
 
     Si les deux dates sont vides, elles restent null après les étapes 1 et 2.
     La comparaison de l'étape 3 est lexicographique sur les chaînes ISO
     (YYYY-MM-DD HH:MM:SS), ce qui est équivalent à une comparaison chronologique.
+    L'étape 4 s'applique après l'étape 3 : une date < 2010 issue d'un swap est
+    également corrigée.
     """
     df = df.copy()
 
@@ -139,9 +142,15 @@ def fix_dates(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[swap, "OrderDate"]    = df.loc[swap, "PaymentDate"]
     df.loc[swap, "PaymentDate"]  = tmp
 
-    print(f"    OrderDate vide → PaymentDate        : {int(od_empty.sum()):,}")
-    print(f"    PaymentDate vide → OrderDate        : {int(pmt_empty.sum()):,}")
-    print(f"    Échange OD ↔ PD (OD > PD)           : {int(swap.sum()):,}")
+    # 4. OrderDate antérieure à 2010 → remplace par PaymentDate
+    od_year = pd.to_datetime(df["OrderDate"], errors="coerce").dt.year
+    too_old = df["OrderDate"].notna() & (od_year < 2010)
+    df.loc[too_old, "OrderDate"] = df.loc[too_old, "PaymentDate"]
+
+    print(f"    OrderDate vide → PaymentDate              : {int(od_empty.sum()):,}")
+    print(f"    PaymentDate vide → OrderDate              : {int(pmt_empty.sum()):,}")
+    print(f"    Échange OD ↔ PD (OD > PD)                : {int(swap.sum()):,}")
+    print(f"    OrderDate < 2010 → PaymentDate            : {int(too_old.sum()):,}")
 
     return df
 

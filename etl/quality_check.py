@@ -195,10 +195,17 @@ def check_orders(df: pd.DataFrame, filename: str) -> pd.DataFrame:
 
     if is_empty_odate.any():
         errors.append(make_errors(df, is_empty_odate, filename, "OrderDate",
-            "Vide — sera null au niveau curated"))
+            "Vide — sera remplacée par PaymentDate au niveau curated"))
     if is_invalid_odate.any():
         errors.append(make_errors(df, is_invalid_odate, filename, "OrderDate",
             "Format invalide (attendu: YYYY-MM-DD HH:MM:SS), valeur: '" + df["OrderDate"].fillna("") + "'"))
+
+    # OrderDate — année < 2010 (aberrante) → sera remplacée par PaymentDate au curated
+    is_old_odate = ~is_empty_odate & ~is_invalid_odate & (order_dates.dt.year < 2010)
+    if is_old_odate.any():
+        errors.append(make_errors(df, is_old_odate, filename, "OrderDate",
+            "Année antérieure à 2010 — sera remplacée par PaymentDate au niveau curated, "
+            "valeur: '" + df["OrderDate"].fillna("") + "'"))
 
     # SupplierID — format : 1 lettre majuscule + 3 chiffres
     mask = ~df["SupplierID"].str.match(r"^[A-Z]\d{3}$", na=False)
