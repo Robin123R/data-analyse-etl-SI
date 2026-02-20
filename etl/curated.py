@@ -7,7 +7,8 @@ et produit un fichier curated (One Big Table) prêt pour l'export MongoDB.
 Transformations appliquées :
   - OrderID vide       → inférence par lignes adjacentes (si next - prev == 2), sinon null
   - OrderID valide     → préfixe O → 0  (ex. O0000001 → 00000001)
-  - SupplierID         → préfixe lettre → 0  (ex. S002 → 0002) — moodle_01 + moodle_03
+  - SupplierID         → correction O/0 dans partie numérique (ex. S02O → S020)
+                         puis préfixe lettre → 0 (ex. S020 → 0020) — moodle_01 + moodle_03
   - OrderDate vide     → utilise PaymentDate si disponible, sinon null
   - PaymentDate vide   → utilise OrderDate si disponible, sinon null
   - OrderDate > PaymentDate → échange des deux valeurs
@@ -70,6 +71,24 @@ def find_files() -> dict:
     return result
 
 # ─── Transformations communes ─────────────────────────────────────────────────
+
+def fix_supplier_id_ocr(series: pd.Series) -> pd.Series:
+    """
+    Corrige la confusion O (lettre) / 0 (chiffre) dans la partie numérique
+    du SupplierID (positions 1 à 3, après la lettre préfixe).
+
+    Ex : S02O → S020  (puis normalize_id_prefix le passe en 0020)
+
+    S'applique uniquement aux valeurs de forme [A-Z][A-Z0-9]{3} — les autres
+    (vides, trop courtes, etc.) sont laissées telles quelles.
+    """
+    candidate = series.str.match(r"^[A-Z][A-Z0-9]{3}$", na=False)
+    result = series.copy()
+    prefix   = series[candidate].str[0]
+    digits   = series[candidate].str[1:].str.replace("O", "0", regex=False)
+    result[candidate] = prefix + digits
+    return result
+
 
 def normalize_id_prefix(series: pd.Series, pattern: str) -> pd.Series:
     """
@@ -189,8 +208,9 @@ def load_orders(filepaths: list) -> pd.DataFrame:
         # 2. Normalisation OrderID : O → 0
         df["OrderID"] = normalize_id_prefix(null_if_blank(df["OrderID"]), r"^O\d{7}$")
 
-        # 3. Normalisation SupplierID : lettre → 0
-        df["SupplierID"] = normalize_id_prefix(df["SupplierID"].fillna(""), r"^[A-Z]\d{3}$")
+        # 3. Normalisation SupplierID : correction O/0 puis préfixe lettre → 0
+        df["SupplierID"] = fix_supplier_id_ocr(df["SupplierID"].fillna(""))
+        df["SupplierID"] = normalize_id_prefix(df["SupplierID"], r"^[A-Z]\d{3}$")
         df["SupplierID"] = null_if_blank(df["SupplierID"])
 
         # 4. Champs vides → null
@@ -285,16 +305,50 @@ def load_clients(filepaths: list) -> pd.DataFrame:
 
 # ─── moodle_03 — Suppliers ────────────────────────────────────────────────────
 
+def _read_suppliers_csv(fp: Path) -> pd.DataFrame:
+    """
+    Lecteur robuste pour moodle_03 (SupplierID, SupplierName).
+
+    pandas.read_csv() ne convient pas ici : si un SupplierName contient une
+    virgule sans être quoté, pandas voit trop de colonnes et crash.
+    On split à la main sur la PREMIÈRE virgule — le SupplierID étant toujours
+    au format [A-Z]\\d{3}, il ne peut jamais contenir de virgule.
+    Les guillemets CSV du SupplierName sont retirés si présents.
+
+    Cas supportés :
+      S003,Johnson-Davis and Sons         → name = Johnson-Davis and Sons
+      S004,"Guzman, Hoffman and Baldwin"  → name = Guzman, Hoffman and Baldwin
+      S004,Guzman, Hoffman and Baldwin    → name = Guzman, Hoffman and Baldwin
+    """
+    lines = fp.read_text(encoding="utf-8").splitlines()
+    rows = []
+    for line in lines[1:]:     # ignorer le header
+        if not line.strip():
+            continue
+        sid, _, rest = line.partition(",")
+        name = rest.strip()
+        if name.startswith('"') and name.endswith('"'):
+            name = name[1:-1].replace('""', '"')
+        rows.append({"SupplierID": sid.strip(), "SupplierName": name or None})
+    if not rows:
+        return pd.DataFrame(columns=["SupplierID", "SupplierName"])
+    return pd.DataFrame(rows, dtype=str)
+
+
 def load_suppliers(filepaths: list) -> pd.DataFrame:
     frames = []
 
     for fp in filepaths:
         print(f"  Lecture : {fp.name}")
-        df = pd.read_csv(fp, dtype=str)
+        df = _read_suppliers_csv(fp)
 
-        # Normalisation SupplierID : lettre → 0
-        df["SupplierID"] = normalize_id_prefix(df["SupplierID"].fillna(""), r"^[A-Z]\d{3}$")
+        # Normalisation SupplierID : correction O/0 puis préfixe lettre → 0
+        df["SupplierID"] = fix_supplier_id_ocr(df["SupplierID"].fillna(""))
+        df["SupplierID"] = normalize_id_prefix(df["SupplierID"], r"^[A-Z]\d{3}$")
         df["SupplierID"] = null_if_blank(df["SupplierID"])
+
+        # SupplierName vide → null (sera "unknown" après le fillna global de build_obt)
+        df["SupplierName"] = null_if_blank(df["SupplierName"])
 
         frames.append(df)
 

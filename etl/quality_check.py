@@ -45,6 +45,36 @@ def detect_file_type(filepath: Path) -> str:
     return "clients"
 
 
+def _read_suppliers_csv(fp: Path) -> pd.DataFrame:
+    """
+    Lecteur robuste pour moodle_03 (SupplierID, SupplierName).
+
+    pandas.read_csv() ne convient pas ici : si un SupplierName contient une
+    virgule sans être quoté, pandas voit trop de colonnes et crash.
+    On split à la main sur la PREMIÈRE virgule — le SupplierID étant toujours
+    au format [A-Z]\\d{3}, il ne peut jamais contenir de virgule.
+    Les guillemets CSV du SupplierName sont retirés si présents.
+
+    Cas supportés :
+      S003,Johnson-Davis and Sons         → name = Johnson-Davis and Sons
+      S004,"Guzman, Hoffman and Baldwin"  → name = Guzman, Hoffman and Baldwin
+      S004,Guzman, Hoffman and Baldwin    → name = Guzman, Hoffman and Baldwin
+    """
+    lines = fp.read_text(encoding="utf-8").splitlines()
+    rows = []
+    for line in lines[1:]:     # ignorer le header
+        if not line.strip():
+            continue
+        sid, _, rest = line.partition(",")
+        name = rest.strip()
+        if name.startswith('"') and name.endswith('"'):
+            name = name[1:-1].replace('""', '"')
+        rows.append({"SupplierID": sid.strip(), "SupplierName": name or None})
+    if not rows:
+        return pd.DataFrame(columns=["SupplierID", "SupplierName"])
+    return pd.DataFrame(rows, dtype=str)
+
+
 def load_file(filepath: Path, file_type: str) -> pd.DataFrame:
     """
     Charge le CSV en string brut et ajoute deux colonnes internes :
@@ -61,6 +91,11 @@ def load_file(filepath: Path, file_type: str) -> pd.DataFrame:
         df = pd.read_csv(filepath, header=None, names=CLIENTS_COLUMNS, dtype=str)
         df["_line"] = range(1, len(df) + 1)
         df["_raw"]  = raw_lines[: len(df)]
+    elif file_type == "suppliers":
+        # Lecteur robuste : split sur la première virgule (voir _read_suppliers_csv)
+        df = _read_suppliers_csv(filepath)
+        df["_line"] = range(2, len(df) + 2)
+        df["_raw"]  = raw_lines[1 : len(df) + 1]
     else:
         df = pd.read_csv(filepath, dtype=str)
         df["_line"] = range(2, len(df) + 2)          # +2 : index 0-based + header

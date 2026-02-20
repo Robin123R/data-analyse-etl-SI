@@ -106,7 +106,25 @@ Si le couple `ClientName + ProductName` est absent de moodle_02 → champs adres
 ### Règles additionnelles
 
 - `SupplierID` doit être **unique** dans cette table (c'est une table de référence)
-- `SupplierName` peut contenir des virgules (géré par les guillemets CSV)
+- `SupplierName` peut contenir des virgules, avec ou sans guillemets CSV
+
+### Parsing robuste de SupplierName
+
+Le fichier présente une quoting **inconsistante** : certains noms sont entre guillemets,
+d'autres non, indépendamment de la présence de virgules dans le nom.
+
+`pandas.read_csv()` n'est pas utilisé pour ce fichier : si un nom contient une virgule
+sans être quoté, pandas voit trop de colonnes et crash.
+
+**Stratégie retenue** — split sur la **première virgule** :
+- `SupplierID` = tout ce qui précède la première virgule (`[A-Z]\d{3}`, jamais de virgule)
+- `SupplierName` = tout ce qui suit, guillemets CSV retirés si présents
+
+| Ligne brute dans le fichier | SupplierName lu |
+|---|---|
+| `S003,Johnson-Davis and Sons` | `Johnson-Davis and Sons` |
+| `S004,"Guzman, Hoffman and Baldwin Ltd"` | `Guzman, Hoffman and Baldwin Ltd` |
+| `S004,Guzman, Hoffman and Baldwin Ltd` | `Guzman, Hoffman and Baldwin Ltd` |
 
 ### Clé de jointure vers moodle_01
 
@@ -149,7 +167,8 @@ Ces règles s'appliquent **uniquement au niveau curated**. Les données raw rest
 | Champ | Source | Transformation | Exemple |
 |---|---|---|---|
 | `OrderID` | moodle_01 | Remplacer le préfixe `O` (lettre) par `0` (chiffre) | `O0000001` → `00000001` |
-| `SupplierID` | moodle_01 + moodle_03 | Remplacer la lettre préfixe par `0` (chiffre) | `S002` → `0002`, `S016` → `0016` |
+| `SupplierID` | moodle_01 + moodle_03 | 1. Corriger `O` (lettre) → `0` (chiffre) dans les positions numériques (1–3) | `S02O` → `S020` |
+| `SupplierID` | moodle_01 + moodle_03 | 2. Remplacer la lettre préfixe par `0` (chiffre) | `S020` → `0020`, `S002` → `0002` |
 
 > La transformation s'applique à moodle_01 (colonne `SupplierID`) et à moodle_03
 > (colonne `SupplierID`), de façon à ce que la jointure reste cohérente des deux côtés.
