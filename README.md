@@ -168,7 +168,43 @@ mongoimport --db <base> --collection orders \
 
 ---
 
-## 5. Diagnostic (optionnel)
+## 5. Job 3 — Calendrier curated
+
+Génère une table calendrier avec une ligne par date pour 2022 et 2023.
+
+```bash
+# Export CSV (défaut)
+python etl/curated_calendar.py
+
+# Export JSON (NDJSON pour mongoimport)
+python etl/curated_calendar.py --format json
+
+# Années personnalisées
+python etl/curated_calendar.py --years 2022 2023 --format json
+```
+
+**Import dans MongoDB :**
+```bash
+mongoimport --db <base> --collection calendar \
+            --type json \
+            --file data_clean/curated_calendar.json
+```
+
+**Prérequis :** avoir exécuté `fetch_holidays.py` au préalable (fichiers nager.at nécessaires).
+
+**Output :** `data_clean/curated_calendar.csv`
+
+| Colonne | Type | Description |
+|---|---|---|
+| `date` | string (`YYYY-MM-DD`) | Date |
+| `isWeekend` | bool | `True` si samedi ou dimanche |
+| `isUSHoliday` | bool | `True` si jour férié US national (nager.at, `global=true`, type `Public`) |
+
+> 730 lignes pour 2022 + 2023 (365 + 365).
+
+---
+
+## 7. Diagnostic (optionnel)
 
 En cas d'écart de lignes entre le fichier produit et la base de données cible :
 
