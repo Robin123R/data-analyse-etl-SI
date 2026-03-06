@@ -26,14 +26,24 @@ ETL_DIR      = PROJECT_ROOT / "etl"
 
 def _docker_compose_cmd() -> list:
     """Retourne le préfixe de commande Docker Compose disponible sur le système."""
+    # Docker Compose V2 (plugin intégré)
     try:
-        result = subprocess.run(
-            ["docker", "compose", "version"],
-            capture_output=True, check=True
-        )
+        subprocess.run(["docker", "compose", "version"], capture_output=True, check=True)
         return ["docker", "compose"]
     except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # Docker Compose V1 (binaire standalone)
+    try:
+        subprocess.run(["docker-compose", "version"], capture_output=True, check=True)
         return ["docker-compose"]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    print("\n  ERREUR : Docker Compose introuvable.")
+    print("  Installe-le avec : sudo apt-get install docker-compose-plugin")
+    print("  ou : https://docs.docker.com/compose/install/\n")
+    sys.exit(1)
 
 
 def run(label: str, cmd: list, check: bool = True) -> subprocess.CompletedProcess:
