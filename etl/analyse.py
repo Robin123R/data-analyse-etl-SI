@@ -326,8 +326,18 @@ def graph2_top_products(coll, output_dir: Path) -> Path:
     # Sort ascending so the highest bar appears at the top
     df   = df.sort_values("count", ascending=True)
 
-    fig, ax = plt.subplots(figsize=(10, 7))
-    bars = ax.barh(df["product"], df["count"], color="#2196F3", edgecolor="white")
+    fig, ax = plt.subplots(figsize=(11, 7))
+
+    # Color gradient: lightest bar for lowest, darkest for highest
+    norm = plt.Normalize(df["count"].min(), df["count"].max())
+    colors = plt.cm.Blues(0.35 + norm(df["count"]) * 0.55)
+
+    bars = ax.barh(df["product"], df["count"], color=colors, edgecolor="white", linewidth=0.5)
+
+    # Zoom in on the actual data range to reveal differences
+    x_min = df["count"].min() * 0.97
+    x_max = df["count"].max() * 1.035
+    ax.set_xlim(x_min, x_max)
 
     ax.set_title(
         "Top 10 Most Ordered Products\n(moodle dataset)",
@@ -338,9 +348,15 @@ def graph2_top_products(coll, output_dir: Path) -> Path:
 
     for bar, val in zip(bars, df["count"]):
         ax.text(
-            bar.get_width() + df["count"].max() * 0.005, bar.get_y() + bar.get_height() / 2,
+            bar.get_width() + (x_max - x_min) * 0.004,
+            bar.get_y() + bar.get_height() / 2,
             f"{val:,}", va="center", fontsize=9,
         )
+
+    # Broken axis indicator (diagonal tick marks on left spine)
+    ax.annotate("* L'axe X ne commence pas à 0", xy=(0, -0.09),
+                xycoords="axes fraction", fontsize=8,
+                color="gray", style="italic")
 
     plt.tight_layout()
     path = output_dir / "graph2_top_products.png"
