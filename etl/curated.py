@@ -303,8 +303,6 @@ def load_clients(filepaths: list) -> pd.DataFrame:
 
     # Dédoublonnage sur la clé de jointure (première occurrence conservée)
     df = df.drop_duplicates(subset=["ClientName", "ProductName"], keep="first")
-    print(f"  Dédoublonnage sur ClientName+ProductName : "
-          f"{before - len(df):,} lignes supprimées, {len(df):,} conservées")
 
     # Décomposition de l'adresse en 4 champs plats
     addr_cols = decompose_address(df["ClientAddress"])
