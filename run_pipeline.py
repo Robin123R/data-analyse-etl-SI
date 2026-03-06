@@ -24,6 +24,18 @@ PROJECT_ROOT = Path(__file__).parent
 ETL_DIR      = PROJECT_ROOT / "etl"
 
 
+def _docker_compose_cmd() -> list:
+    """Retourne le préfixe de commande Docker Compose disponible sur le système."""
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True, check=True
+        )
+        return ["docker", "compose"]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ["docker-compose"]
+
+
 def run(label: str, cmd: list, check: bool = True) -> subprocess.CompletedProcess:
     print(f"\n{'═' * 60}")
     print(f"  {label}")
@@ -87,16 +99,19 @@ def main():
         print("  Étape 4/5 — Docker : arrêt éventuel + démarrage MongoDB")
         print(f"{'═' * 60}")
 
+        dc = _docker_compose_cmd()
+
         # Arrêt propre du stack existant (ignoré si rien ne tourne)
         subprocess.run(
-            ["docker", "compose", "down"],
+            dc + ["down"],
             cwd=str(PROJECT_ROOT),
             check=False
         )
 
         # Démarrage en arrière-plan
+        detach_flag = "--detach" if dc[0] == "docker" else "-d"
         subprocess.run(
-            ["docker", "compose", "up", "--detach"],
+            dc + ["up", detach_flag],
             cwd=str(PROJECT_ROOT),
             check=True
         )
@@ -104,7 +119,7 @@ def main():
         # Suivi de l'import (bloquant jusqu'à la fin du conteneur importer)
         print("\n  Suivi de l'import (Ctrl+C pour détacher, MongoDB restera actif) :\n")
         subprocess.run(
-            ["docker", "compose", "logs", "--follow", "importer"],
+            dc + ["logs", "--follow", "importer"],
             cwd=str(PROJECT_ROOT),
             check=False
         )
